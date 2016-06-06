@@ -1,0 +1,284 @@
+<!-- Sachuk Aleksandr 8-2 03.06.2016 -->
+
+<html>
+<head>
+    <title>Mandelbrot, zoom & drag</title>
+    <meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+    <script type="text/javascript" src="glMatrix-0.9.5.min.js"></script>
+
+    <script type="text/javascript">
+
+        var gl;
+        function initGL(canvas) {
+            try {
+                gl = canvas.getContext("experimental-webgl");
+                gl.viewportWidth = canvas.width;
+                gl.viewportHeight = canvas.height;
+            } catch (e) {
+            }
+            if (!gl) {
+                alert("Could not initialise WebGL, sorry :-(");
+            }
+        }
+
+
+        function getShader(gl, path, type) {
+
+            str = ReadTXT(path);
+
+            var shader;
+            if (type == "frag") {
+                shader = gl.createShader(gl.FRAGMENT_SHADER);
+            } else if (type == "vert") {
+                shader = gl.createShader(gl.VERTEX_SHADER);
+            } else {
+                return null;
+            }
+
+            gl.shaderSource(shader, str);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                alert(gl.getShaderInfoLog(shader));
+                return null;
+            }
+
+
+            return shader;
+        }
+
+        function ReadTXT(path) {
+            var F = new XMLHttpRequest();
+            var txt = "";
+            F.open("GET", path, false);
+            F.send(null);
+            txt = F.responseText;
+            return txt;
+        }
+
+        var shaderProgram;
+        var num2 = 2;
+        var num = 25;
+        var deltawheel = 0.25;
+        var OldMouseX = 0.0
+        var OldMouseY = 0.0;
+        var posX = 5.0;
+        var posY = 0.0;
+        var L = -2.0;
+        var R = 1.0;
+        var T = 1.5;
+        var B = -1.5;
+        var W;
+        var H;
+
+        function initShaders() {
+            var fragmentShader = getShader(gl, "shader.frag", "frag");
+            var vertexShader = getShader(gl, "shader.vert", "vert");
+
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.linkProgram(shaderProgram);
+
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Could not initialise shaders");
+            }
+
+            gl.useProgram(shaderProgram);
+
+            shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+            gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+            shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+            shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+            shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+        }
+
+        var mvMatrix = mat4.create();
+        var pMatrix = mat4.create();
+
+        function setAllUniforms(num) {
+            var OldMouseX, OldMouseY;
+            if (OldMouseX != posX || OldMouseY != posY) {
+                OldMouseX = posX;
+                OldMouseY = posY;
+            }
+
+            gl.uniform1i(gl.getUniformLocation(shaderProgram, "Size1"), num);
+            gl.uniform1f(gl.getUniformLocation(shaderProgram, "Size2"), num2);
+            gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+            gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+            gl.uniform2f(gl.getUniformLocation(shaderProgram, "DeltaMouse"), DposX / 1000.0, DposY / 1000.0);
+            gl.uniform1f(gl.getUniformLocation(shaderProgram, "L"), L);
+            gl.uniform1f(gl.getUniformLocation(shaderProgram, "R"), R);
+            gl.uniform1f(gl.getUniformLocation(shaderProgram, "T"), T);
+            gl.uniform1f(gl.getUniformLocation(shaderProgram, "B"), B);
+        }
+
+
+        function handleLoadedTexture(texture) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.bindTexture(gl.TEXTURE_2D, null);
+        }
+
+
+        var neheTexture;
+
+        function initTexture() {
+            neheTexture = gl.createTexture();
+            neheTexture.image = new Image();
+            neheTexture.image.onload = function () {
+                handleLoadedTexture(neheTexture)
+            }
+
+            neheTexture.image.src = "texture.jpeg";
+        }
+
+        var squareVertexPositionBuffer;
+
+        function initBuffers() {
+            squareVertexPositionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+            vertices = [
+                1.0, 1.0, 0.0,
+                -1.0, 1.0, 0.0,
+                1.0, -1.0, 0.0,
+                -1.0, -1.0, 0.0
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+            squareVertexPositionBuffer.itemSize = 3;
+            squareVertexPositionBuffer.numItems = 4;
+        }
+
+        function drawScene(num) {
+            gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, neheTexture);
+            gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+            mat4.identity(mvMatrix);
+            mat4.translate(mvMatrix, [-0.32, 0.0, -1]);
+            gl.bindBuffer(gl.ARRAY_BUFFER, squareVertexPositionBuffer);
+            gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, squareVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+            setAllUniforms(num);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, squareVertexPositionBuffer.numItems);
+        }
+
+        function webGLStart() {
+            var canvas = document.getElementById("canvas");
+            initGL(canvas);
+            initShaders();
+            initBuffers();
+            initTexture();
+
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.enable(gl.DEPTH_TEST);
+
+            drawScene(5.0);
+            tick();
+        }
+
+        function Param1() {
+            num = document.getElementById("Size1").value;
+        }
+        function Param2() {
+            num2 = document.getElementById("Size2").value;
+        }
+
+        function tick() {
+            window.requestAnimationFrame(tick);
+            drawScene(num);
+        }
+
+        <!-- MAPPING ZOOM & DRAG FUNCTIONS -->
+
+        <!-- Zoom functions -->
+
+        var IsZoom = 0;
+
+        function MouseWheel() {
+            var event = window.event;
+            var rect = document.getElementById('canvas');
+            var delta = ((((event.wheelDelta) ? event.wheelDelta / 120 : event.detail / -3) || false) > 0) ? (9.0 / 10.0) : (10.0 / 9.0);
+            IsZoom = 1;
+            W = R - L;
+            H = T - B;
+            L = L + posX / rect.width * W * (1 - delta);
+            R = L + W * delta;
+            B = B + posY / rect.height * H * (1 - delta);
+            T = B + H * delta;
+        }
+
+        function ZoomStyle() {
+            if (IsZoom == 1)
+                canvas.style.cursor = crosshair;
+            //else
+                //canvas.style.cursor = default;
+        }
+
+        <!-- Drag functions -->
+
+        function MPos() {
+            var event = window.event;
+
+            posX = event.clientX;
+            posY = event.clientY;
+        }
+
+        var IsDrag = 0;
+        function Isdrag() {
+            IsDrag = 1;
+            canvas.style.cursor = all-scroll;
+        }
+
+        function IsntDrag() {
+            IsDrag = 0;
+            //canvas.style.cursor = default;
+        }
+
+        var DposY = 0.0;
+        var DposX = 0.0;
+
+        function DragProc() {
+            var event = window.event;
+            var rect = document.getElementById('canvas').getBoundingClientRect();
+            if (IsDrag) {
+                var deltaX, deltaY;
+                deltaX = event.clientX - rect.left - posX;
+                deltaY = event.clientY - rect.top - posY;
+                T -= deltaY / (rect.height / (T - B));
+                R -= deltaX / (rect.width / (R - L));
+                L -= deltaX / (rect.width / (R - L));
+                B -= deltaY / (rect.height / (T - B));
+            }
+            posX = event.clientX - rect.left;
+            posY = event.clientY - rect.top;
+        }
+
+    </script>
+
+
+</head>
+
+
+<body onload="webGLStart();">
+<canvas id="canvas" style="border: none;" width="1150" height="720" onwheel="MouseWheel()" onmousedown="Isdrag()"
+        onmousemove="DragProc()" onmouseup="IsntDrag()"></canvas>
+<br>
+<input type="text" id="Param1" onkeyup="GKey1()" value="59">
+<br>
+<input type="text" id="Param2" onkeyup="GKey2()" value="32000">
+<br>
+
+</body>
+
+</html>
